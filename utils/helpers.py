@@ -115,18 +115,18 @@ def update_slot(json_data, dict_target):
     """
     # 遍历JSON数据中的每个元素
     for item in json_data:
-        # 检查value字段是否为空字符串
-        if item['value'] != '':
+        # 确保item是字典类型
+        if isinstance(item, dict) and item.get('value', '') != '':
             for target in dict_target:
                 if target['name'] == item['name']:
-                    target['value'] = item.get('value')
+                    target['value'] = item['value']
                     break
-
 
 def format_name_value_for_logging(json_data):
     """
     抽取参数名称和value值
     """
+    json_data = prepare_json_data_for_api(json_data)
     log_strings = []
     for item in json_data:
         name = item.get('name', 'Unknown name')  # 获取name，如果不存在则使用'Unknown name'
@@ -135,42 +135,115 @@ def format_name_value_for_logging(json_data):
         log_strings.append(log_string)
     return '\n'.join(log_strings)
 
+def parse_purchase_list(purchase_str):
+    """
+    解析采购列表字符串，转换为二维数组，每个元素包含商品名称和数量。
+    """
+    # 定义正则表达式匹配商品和数量
+    pattern = re.compile(r"([\u4e00-\u9fa5]+?)\s*(\d+)\s*([支张台个批对打份盒箱]+)")
+    
+    # 查找所有匹配项
+    matches = pattern.findall(purchase_str)
+    
+    # 提取商品名称和数量
+    result = []
+    for match in matches:
+        item_name = match[0]  # 商品名称
+        quantity = match[1]  # 数量
+        result.append((item_name, int(quantity)))  # 将商品名称和数量作为元组添加到结果列表中
+    
+    return result
+
+def prepare_json_data_for_api(json_data):
+    """
+    修改json_data中特定条目的value格式，准备发送给API。
+    """
+    updated_json_data = []  # 创建一个新的列表来存储更新后的条目
+    for item in json_data:
+        if item.get("name") == "采购的内容清单":
+            current_value = item.get("value", "")
+            if isinstance(current_value, str):
+                # 使用 parse_purchase_list 方法解析购买清单字符串
+                formatted_list = parse_purchase_list(current_value)
+                updated_json_data.append({"name": item["name"], "value": formatted_list})
+            elif isinstance(current_value, list):
+                updated_json_data.append(item)  # 如果已经是列表格式，则直接添加
+        else:
+            updated_json_data.append(item)  # 添加不需要修改的条目
+    return updated_json_data
+
+# def extract_json_from_string(input_string):
+#     """
+#     JSON抽取函数
+#     返回包含JSON对象的列表
+#     """
+    
+#     try:
+#         # 正则表达式假设JSON对象由花括号括起来
+#         matches = re.findall(r'\{.*?\}', input_string, re.DOTALL)
+
+#         # 验证找到的每个匹配项是否为有效的JSON
+#         valid_jsons = []
+#         for match in matches:
+#             try:
+#                 json_obj = json.loads(match)
+#                 valid_jsons.append(json_obj)
+#             except json.JSONDecodeError:
+#                 try:
+#                     valid_jsons.append(fix_json(match))
+#                 except json.JSONDecodeError:
+#                     continue  # 如果不是有效的JSON，跳过该匹配项
+#                 continue  # 如果不是有效的JSON，跳过该匹配项
+
+#         return valid_jsons
+#     except Exception as e:
+#         print(f"Error occurred: {e}")
+#         return []
 
 def extract_json_from_string(input_string):
-    """
-    JSON抽取函数
-    返回包含JSON对象的列表
-    """
     try:
-        # 正则表达式假设JSON对象由花括号括起来
+        # 使用非贪婪匹配改进提取，避免截断嵌套结构
         matches = re.findall(r'\{.*?\}', input_string, re.DOTALL)
-
-        # 验证找到的每个匹配项是否为有效的JSON
         valid_jsons = []
         for match in matches:
             try:
                 json_obj = json.loads(match)
                 valid_jsons.append(json_obj)
             except json.JSONDecodeError:
-                try:
-                    valid_jsons.append(fix_json(match))
-                except json.JSONDecodeError:
-                    continue  # 如果不是有效的JSON，跳过该匹配项
-                continue  # 如果不是有效的JSON，跳过该匹配项
-
-        return valid_jsons
+                # 尝试使用修复函数
+                fixed_json = fix_json(match)
+                print(f"try to fix")
+                if fixed_json:
+                    # 尝试解析修复后的JSON字符串
+                    try:
+                        fixed_json_obj = json.loads(fixed_json)
+                        valid_jsons.append(fixed_json_obj)
+                    except json.JSONDecodeError:
+                        continue  # 如果修复失败，跳过当前匹配
     except Exception as e:
-        print(f"Error occurred: {e}")
+        print(f"解析错误: {e}")
         return []
+    return valid_jsons
 
-
-def fix_json(bad_json):
-    # 首先，用双引号替换掉所有的单引号
-    fixed_json = bad_json.replace("'", '"')
+def fix_json(llm_output):
+    # 修复可能存在的JSON格式问题，例如替换单引号为双引号
+    fixed_output = llm_output.replace("'", '"')
+    # 尝试解析修复后的JSON字符串
     try:
-        # 然后尝试解析
-        return json.loads(fixed_json)
-    except json.JSONDecodeError:
-        # 如果解析失败，打印错误信息，但不会崩溃
-        print("给定的字符串不是有效的 JSON 格式。")
-
+        json_object = json.loads(fixed_output)
+        return json.dumps(json_object)  # 返回修复并解析成功的JSON字符串
+    except json.JSONDecodeError as e:
+        print(f"解析错误: {e}。在处理字符串: {fixed_output}")
+        return None
+    
+# def fix_json(input_string):
+#     try:
+#         # 处理字符串，替换不规范的引号等
+#         fixed_string = input_string.replace("\'", "\"").replace('答：', '')
+#         # 尝试解析修正后的字符串
+#         json_obj = json.loads(fixed_string)
+#         # 确保总是返回一个列表
+#         return [json_obj] if isinstance(json_obj, dict) else json_obj
+#     except json.JSONDecodeError as e:
+#         print(f"修正后的解析错误: {e}")
+#         return []
